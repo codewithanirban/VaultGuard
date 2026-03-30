@@ -15,6 +15,10 @@ const passwordRoutes = require('./src/routes/passwordRoutes');
 
 const app = express();
 
+// Trust the reverse proxy (Render, Vercel, Heroku) so we can securely parse
+// the 'X-Forwarded-For' header used by express-rate-limit.
+app.set('trust proxy', 1);
+
 // ──── Security middleware ──────────────────────────
 app.use(
   helmet({
