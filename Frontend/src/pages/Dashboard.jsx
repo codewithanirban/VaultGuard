@@ -1,272 +1,315 @@
-import { useState, useEffect, useCallback, useContext, useRef } from 'react';
+// File: Frontend/src/pages/Dashboard.jsx
+// Purpose: Main vault view completely overhauled with sidebar, health stats, and export capability.
+// Dependencies: react, AuthContext, passwordService, PasswordCard, PasswordForm, exportPasswords, passwordHealth
+// Production-safe: yes
+
+import { useState, useEffect, useCallback, useContext, useRef, useMemo } from 'react';
 import { AuthContext } from '../context/AuthContext';
-import { useToast } from '../components/Toast';
 import { fetchAll, createEntry, updateEntry, deleteEntry } from '../api/passwordService';
 import PasswordCard from '../components/PasswordCard';
 import PasswordForm from '../components/PasswordForm';
+import { exportToJSON } from '../utils/exportPasswords';
+import { checkHealth, getHealthSummary } from '../utils/passwordHealth';
 
 const CATEGORIES = [
-  { value: 'all', label: 'All Categories' },
-  { value: 'work', label: 'Work' },
-  { value: 'personal', label: 'Personal' },
-  { value: 'finance', label: 'Finance' },
-  { value: 'social', label: 'Social' },
-  { value: 'other', label: 'Other' },
+  { value: 'all', label: 'All Passwords', icon: '📂' },
+  { value: 'personal', label: 'Personal', icon: '👤' },
+  { value: 'work', label: 'Work', icon: '💼' },
+  { value: 'finance', label: 'Finance', icon: '🏦' },
+  { value: 'social', label: 'Social', icon: '💬' },
+  { value: 'other', label: 'Other', icon: '🔑' },
 ];
 
-/**
- * Dashboard page — main vault view after authentication.
- *
- * Displays a searchable, filterable grid of PasswordCards with a
- * modal overlay for creating / editing entries.
- *
- * @returns {JSX.Element}
- */
 const Dashboard = () => {
   const { user, logout } = useContext(AuthContext);
-  const { addToast } = useToast();
 
-  // ── Data state ────────────────────────────────────
   const [entries, setEntries] = useState([]);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  // ── Modal state ───────────────────────────────────
+  
   const [showModal, setShowModal] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // Debounce timer ref
   const debounceRef = useRef(null);
 
-  // ── Fetch entries ─────────────────────────────────
-  /**
-   * Loads all password entries, optionally filtered by search and category.
-   * @param {string} [searchTerm='']
-   * @param {string} [category='all']
-   */
   const loadEntries = useCallback(async (searchTerm = '', category = 'all') => {
     try {
       setLoading(true);
-      setError('');
       const data = await fetchAll(searchTerm, category);
       setEntries(data);
     } catch (err) {
-      const msg = err.response?.data?.error || 'Failed to load passwords';
-      setError(msg);
-      addToast(msg, 'error');
+      console.error(err);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Initial load
-  useEffect(() => {
-    loadEntries();
-  }, [loadEntries]);
+  useEffect(() => { loadEntries(); }, [loadEntries]);
 
-  // Debounced search
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       loadEntries(search, categoryFilter);
-    }, 300);
+    }, 400);
     return () => clearTimeout(debounceRef.current);
   }, [search, categoryFilter, loadEntries]);
 
-  // ── Modal helpers ─────────────────────────────────
-  const openCreateModal = () => {
-    setSelectedEntry(null);
-    setShowModal(true);
-  };
-
-  const openEditModal = (entry) => {
-    setSelectedEntry(entry);
-    setShowModal(true);
-  };
-
-  const closeModal = () => {
-    setShowModal(false);
-    setSelectedEntry(null);
-  };
-
-  // Close on Escape
-  useEffect(() => {
-    const handleKey = (e) => {
-      if (e.key === 'Escape' && showModal) closeModal();
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [showModal]);
-
-  // ── CRUD handlers ─────────────────────────────────
-  /**
-   * Handles form submission for both create and edit.
-   * @param {object} formData
-   */
   const handleFormSubmit = async (formData) => {
     try {
       setSaving(true);
-      setError('');
       if (selectedEntry) {
         await updateEntry(selectedEntry._id, formData);
-        addToast('Entry updated', 'success');
       } else {
         await createEntry(formData);
-        addToast('Entry added', 'success');
       }
-      closeModal();
+      setShowModal(false);
+      setSelectedEntry(null);
       await loadEntries(search, categoryFilter);
     } catch (err) {
-      const msg = err.response?.data?.error || 'Failed to save entry';
-      setError(msg);
-      addToast(msg, 'error');
+      console.error(err);
     } finally {
       setSaving(false);
     }
   };
 
-  /**
-   * Deletes a password entry and refreshes the list.
-   * @param {string} id
-   */
   const handleDelete = async (id) => {
     try {
-      setError('');
       await deleteEntry(id);
-      addToast('Entry deleted', 'success');
       await loadEntries(search, categoryFilter);
     } catch (err) {
-      const msg = err.response?.data?.error || 'Failed to delete entry';
-      setError(msg);
-      addToast(msg, 'error');
+      console.error(err);
     }
   };
 
-  return (
-    <div className="page page--dashboard">
-      {/* ── Header ───────────────────────────────── */}
-      <header className="dashboard-header">
-        <div className="dashboard-title">
-          <h1>My Vault</h1>
-          {user && <span className="dashboard-user">Welcome, {user.name}</span>}
-        </div>
-        <button
-          type="button"
-          className="btn btn--secondary btn--sm"
-          id="logout-btn"
-          onClick={logout}
-        >
-          Log Out
-        </button>
-      </header>
+  const healthMap = useMemo(() => checkHealth(entries), [entries]);
+  const healthStats = useMemo(() => getHealthSummary(healthMap), [healthMap]);
 
-      {/* ── Error banner ─────────────────────────── */}
-      {error && (
-        <div className="alert alert--error alert--dismissible" role="alert">
-          <span className="alert-icon">⚠</span>
-          <span>{error}</span>
-          <button
-            type="button"
-            className="alert-close"
-            onClick={() => setError('')}
-            aria-label="Dismiss error"
-          >
-            ✕
-          </button>
-        </div>
+  return (
+    <div className="dashboard-layout">
+      <style>{`
+        .dashboard-layout {
+          display: flex; height: 100vh; background: var(--bg-primary); overflow: hidden;
+        }
+
+        /* ── SIDEBAR ── */
+        .sidebar {
+          width: 260px; background: var(--bg-secondary); border-right: 1px solid var(--border);
+          display: flex; flex-direction: column; transition: transform 0.3s ease;
+          overflow-y: auto; z-index: 50; flex-shrink: 0;
+        }
+        .sidebar-header { padding: 24px; border-bottom: 1px solid var(--border); }
+        .brand { display: flex; align-items: center; gap: 12px; font-size: 20px; font-weight: 700; color: var(--text-primary); margin-bottom: 24px; }
+        .brand-icon { font-size: 24px; }
+        
+        .health-card {
+          background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 12px; padding: 16px;
+        }
+        .health-title { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; font-weight: 600; text-transform: uppercase; }
+        .health-stat-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 14px; }
+        .health-stat-row:last-child { margin-bottom: 0; }
+        .stat-label { color: var(--text-muted); }
+        .stat-val { font-weight: 600; color: var(--text-primary); }
+        .stat-val.warn { color: var(--warning); }
+        .stat-val.danger { color: var(--danger); }
+
+        .sidebar-nav { flex: 1; padding: 24px 16px; display: flex; flex-direction: column; gap: 8px; }
+        .nav-item {
+          display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 10px;
+          color: var(--text-secondary); text-decoration: none; font-size: 15px; font-weight: 500;
+          cursor: pointer; transition: all 0.2s; border: none; background: transparent; width: 100%; text-align: left;
+        }
+        .nav-item:hover { color: var(--text-primary); background: rgba(255,255,255,0.03); }
+        .nav-item.active { background: var(--accent-glow); color: var(--accent-primary); font-weight: 600; }
+        
+        .sidebar-footer { padding: 24px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 12px; }
+        .user-profile { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+        .avatar { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary)); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; flex-shrink: 0; }
+        .user-info { display: flex; flex-direction: column; overflow: hidden; }
+        .user-name { font-size: 14px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* ── MAIN CONTENT ── */
+        .main-content {
+          flex: 1; display: flex; flex-direction: column; position: relative; overflow-y: auto; overflow-x: hidden; scroll-behavior: smooth;
+        }
+
+        .main-header {
+          position: sticky; top: 0; z-index: 40; background: rgba(10, 10, 15, 0.8);
+          backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--border);
+          padding: 16px 32px; display: flex; align-items: center; justify-content: space-between; gap: 24px;
+        }
+        .mobile-menu-btn { display: none; background: none; border: none; color: var(--text-primary); font-size: 24px; cursor: pointer; }
+        
+        .search-container { position: relative; flex: 1; max-width: 400px; }
+        .search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); }
+        .search-input {
+          width: 100%; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 10px;
+          padding: 12px 16px 12px 40px; color: var(--text-primary); font-size: 14px; transition: all 0.2s; font-family: 'Inter', sans-serif;
+        }
+        .search-input:focus { border-color: var(--accent-primary); outline: none; }
+
+        .vault-content { padding: 32px; flex: 1; }
+        .vault-grid {
+          display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px;
+        }
+        .empty-vault {
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          height: 100%; min-height: 400px; color: var(--text-muted); padding: 40px; text-align: center;
+        }
+
+        /* ── MODAL ── */
+        .modal-overlay {
+          position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(8px);
+          display: flex; align-items: center; justify-content: center; z-index: 999; padding: 24px;
+          animation: fadeIn 0.2s ease-out;
+        }
+        .modal-card {
+          background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 16px;
+          width: 100%; max-width: 500px; padding: 24px; box-shadow: 0 24px 48px rgba(0,0,0,0.5);
+          animation: scaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+        .modal-header {
+          display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;
+        }
+        .modal-header h2 { font-size: 20px; font-weight: 600; color: var(--text-primary); }
+        .modal-close { background: none; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer; }
+        .modal-close:hover { color: var(--text-primary); }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+          .sidebar { position: fixed; inset: 0 auto 0 0; transform: translateX(-100%); }
+          .sidebar.open { transform: translateX(0); }
+          .mobile-menu-btn { display: block; }
+          .main-header { padding: 16px; }
+          .vault-content { padding: 16px; }
+        }
+      `}</style>
+
+      {/* Sidebar Overlay for Mobile */}
+      {sidebarOpen && (
+        <div 
+          className="modal-overlay" 
+          style={{ zIndex: 45, backdropFilter: 'none' }} 
+          onClick={() => setSidebarOpen(false)} 
+        />
       )}
 
-      {/* ── Controls bar ─────────────────────────── */}
-      <div className="dashboard-controls">
-        <div className="controls-left">
-          <div className="search-wrapper">
-            <span className="search-icon" aria-hidden="true">🔍</span>
+      {/* SIDEBAR */}
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
+        <div className="sidebar-header">
+          <div className="brand">
+            <span className="brand-icon">🔐</span> VaultGuard
+          </div>
+          
+          <div className="health-card">
+            <div className="health-title">Vault Health</div>
+            <div className="health-stat-row">
+              <span className="stat-label">Total Items</span>
+              <span className="stat-val">{entries.length}</span>
+            </div>
+            <div className="health-stat-row">
+              <span className="stat-label">Weak</span>
+              <span className={`stat-val ${healthStats.weak > 0 ? 'danger' : ''}`}>{healthStats.weak}</span>
+            </div>
+            <div className="health-stat-row">
+              <span className="stat-label">Reused</span>
+              <span className={`stat-val ${healthStats.reused > 0 ? 'warn' : ''}`}>{healthStats.reused}</span>
+            </div>
+          </div>
+        </div>
+
+        <nav className="sidebar-nav">
+          {CATEGORIES.map(cat => (
+            <button
+              key={cat.value}
+              className={`nav-item ${categoryFilter === cat.value ? 'active' : ''}`}
+              onClick={() => { setCategoryFilter(cat.value); setSidebarOpen(false); }}
+            >
+              <span>{cat.icon}</span> {cat.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-footer">
+          <button 
+            className="btn btn--secondary btn--full" 
+            onClick={() => exportToJSON(entries)}
+            disabled={entries.length === 0}
+            title="Export full vault to JSON"
+          >
+            📥 Export Data
+          </button>
+          
+          <div className="user-profile" style={{ marginTop: '12px' }}>
+            <div className="avatar">{user?.name?.charAt(0) || 'U'}</div>
+            <div className="user-info">
+              <span className="user-name">{user?.name || 'User'}</span>
+            </div>
+          </div>
+          <button className="btn btn--ghost btn--full" onClick={logout}>Sign Out</button>
+        </div>
+      </aside>
+
+      {/* MAIN CONTENT */}
+      <main className="main-content">
+        <header className="main-header">
+          <button className="mobile-menu-btn" onClick={() => setSidebarOpen(true)}>☰</button>
+          
+          <div className="search-container">
+            <span className="search-icon">🔍</span>
             <input
-              id="search-input"
               type="text"
               className="search-input"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by app or username…"
+              placeholder="Search vault..."
             />
           </div>
-          <select
-            id="category-filter"
-            className="category-select"
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-          >
-            {CATEGORIES.map((c) => (
-              <option key={c.value} value={c.value}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <button
-          type="button"
-          className="btn btn--primary"
-          id="add-entry-btn"
-          onClick={openCreateModal}
-        >
-          + Add Entry
-        </button>
-      </div>
 
-      {/* ── Content ──────────────────────────────── */}
-      {loading && entries.length === 0 ? (
-        <div className="loading-spinner dashboard-loading">
-          <div className="spinner" />
-          <p>Loading your vault…</p>
-        </div>
-      ) : entries.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-icon">🔐</div>
-          <h2>No passwords yet</h2>
-          <p>Click &quot;Add Entry&quot; to store your first credential securely.</p>
-        </div>
-      ) : (
-        <div className="password-grid">
-          {entries.map((entry) => (
-            <PasswordCard
-              key={entry._id}
-              entry={entry}
-              onEdit={openEditModal}
-              onDelete={handleDelete}
-              onCopy={() => addToast('Password copied!', 'success')}
-            />
-          ))}
-        </div>
-      )}
+          <button className="btn btn--primary" onClick={() => { setSelectedEntry(null); setShowModal(true); }}>
+            + Add New
+          </button>
+        </header>
 
-      {/* ── Modal overlay ────────────────────────── */}
+        <div className="vault-content">
+          {loading ? (
+             <div className="empty-vault">Loading...</div>
+          ) : entries.length === 0 ? (
+            <div className="empty-vault">
+              <span style={{ fontSize: '48px', margin: '0 0 16px 0', opacity: 0.5 }}>📭</span>
+              <h3>Nothing found</h3>
+              <p>Your vault is empty or no matches found for your search.</p>
+            </div>
+          ) : (
+            <div className="vault-grid">
+              {entries.map(entry => (
+                <PasswordCard
+                  key={entry._id}
+                  entry={entry}
+                  healthWarnings={healthMap.get(entry._id ? entry._id.toString() : '') || []}
+                  onEdit={(e) => { setSelectedEntry(e); setShowModal(true); }}
+                  onDelete={handleDelete}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* MODAL */}
       {showModal && (
-        <div className="modal-overlay" onClick={closeModal} role="presentation">
-          <div
-            className="modal-content"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-label={selectedEntry ? 'Edit Password' : 'Add Password'}
-          >
+        <div className="modal-overlay" onClick={() => setShowModal(false)}>
+          <div className="modal-card" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>{selectedEntry ? 'Edit Entry' : 'New Entry'}</h2>
-              <button
-                type="button"
-                className="modal-close"
-                onClick={closeModal}
-                aria-label="Close modal"
-              >
-                ✕
-              </button>
+              <h2>{selectedEntry ? 'Edit Password' : 'Add Password'}</h2>
+              <button className="modal-close" onClick={() => setShowModal(false)}>✕</button>
             </div>
             <PasswordForm
               initial={selectedEntry}
               onSubmit={handleFormSubmit}
-              onCancel={closeModal}
+              onCancel={() => setShowModal(false)}
               loading={saving}
             />
           </div>
